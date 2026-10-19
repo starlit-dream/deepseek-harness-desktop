@@ -1,0 +1,44 @@
+name: build-dsh-tauri-remote
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: install (only remote + its workspace deps)
+        run: pnpm install --filter "dsh-tauri-remote..." --ignore-scripts
+      - name: build
+        run: pnpm --filter dsh-tauri-remote build
+      - name: pack (rewrite workspace:* to ^0.6.7)
+        run: |
+          cd packages/dsh-tauri-remote
+          node -e '
+          const fs = require("fs");
+          const f = "package.json";
+          const p = JSON.parse(fs.readFileSync(f, "utf8"));
+          for (const k of ["dependencies", "devDependencies", "peerDependencies"]) {
+            if (!p[k]) continue;
+            for (const d of Object.keys(p[k])) {
+              if (String(p[k][d]).startsWith("workspace:")) p[k][d] = "^0.6.7";
+            }
+          }
+          fs.writeFileSync(f, JSON.stringify(p, null, 2));
+          console.log("packed", p.name, p.version);
+          '
+          ls -la dist | head -20
+          mkdir -p out
+          cp -r dist cordis.patch.yml package.json out/
+          tar czf "$GITHUB_WORKSPACE/dsh-tauri-remote.tgz" -C out .
+          ls -la "$GITHUB_WORKSPACE/dsh-tauri-remote.tgz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-tauri-remote
+          path: dsh-tauri-remote.tgz
+          if-no-files-found: error
