@@ -12,54 +12,56 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - name: install (only remote + its workspace deps)
+      - name: install
         run: pnpm install --filter "dsh-tauri-remote..." --ignore-scripts
-      - name: build
-        run: pnpm --filter dsh-tauri-remote build
-      - name: pack (resolve every spec to the installed version)
+      - name: build (remote + its workspace deps)
+        run: pnpm -r --filter "dsh-tauri-remote..." run build
+      - name: pack all three with resolved specs
         run: |
-          cd packages/dsh-tauri-remote
-          node -e '
-          const fs = require("fs");
-          const path = require("path");
-          const f = "package.json";
-          const p = JSON.parse(fs.readFileSync(f, "utf8"));
-          const resolved = {};
-          for (const key of ["dependencies", "peerDependencies"]) {
-            if (!p[key]) continue;
-            for (const dep of Object.keys(p[key])) {
-              if (!/^(catalog:|workspace:)/.test(String(p[key][dep]))) continue;
-              let v = null;
-              for (const base of ["node_modules", "../../node_modules"]) {
-                try {
-                  v = JSON.parse(fs.readFileSync(path.join(base, dep, "package.json"), "utf8")).version;
-                  break;
-                } catch {}
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          for pkg in dsh-tauri dsh-tauri-ui dsh-tauri-remote; do
+            echo "=== $pkg ==="
+            cd "$GITHUB_WORKSPACE/packages/$pkg"
+            node -e '
+            const fs = require("fs"), path = require("path");
+            const f = "package.json";
+            const p = JSON.parse(fs.readFileSync(f, "utf8"));
+            const resolved = {};
+            for (const key of ["dependencies", "peerDependencies"]) {
+              if (!p[key]) continue;
+              for (const dep of Object.keys(p[key])) {
+                const spec = String(p[key][dep]);
+                if (!/^(catalog:|workspace:)/.test(spec)) continue;
+                let v = null;
+                for (const base of ["node_modules", "../../node_modules"]) {
+                  try { v = JSON.parse(fs.readFileSync(path.join(base, dep, "package.json"), "utf8")).version; break; } catch {}
+                }
+                if (!v) { console.error("MISSING " + dep); process.exit(1); }
+                p[key][dep] = "^" + v;
+                resolved[dep] = p[key][dep];
               }
-              if (v) { p[key][dep] = "^" + v; resolved[dep] = p[key][dep]; }
             }
-          }
-          console.log("resolved:", JSON.stringify(resolved));
-          const left = [];
-          for (const key of ["dependencies", "peerDependencies", "devDependencies"]) {
-            if (!p[key]) continue;
-            for (const dep of Object.keys(p[key])) {
-              if (/^(catalog:|workspace:)/.test(String(p[key][dep]))) left.push(key + "/" + dep + "=" + p[key][dep]);
+            for (const key of ["dependencies", "peerDependencies", "devDependencies"]) {
+              if (!p[key]) continue;
+              for (const dep of Object.keys(p[key])) {
+                if (/^(catalog:|workspace:)/.test(String(p[key][dep]))) { console.error("UNRESOLVED " + key + "/" + dep); process.exit(1); }
+              }
             }
-          }
-          if (left.length) { console.error("UNRESOLVED:", left.join(", ")); process.exit(1); }
-          delete p.devDependencies;
-          delete p.scripts;
-          fs.writeFileSync(f, JSON.stringify(p, null, 2));
-          console.log("packed", p.name, p.version);
-          '
-          ls -la dist | head -20
-          mkdir -p out
-          cp -r dist cordis.patch.yml package.json out/
-          tar czf "$GITHUB_WORKSPACE/dsh-tauri-remote.tgz" -C out .
-          ls -la "$GITHUB_WORKSPACE/dsh-tauri-remote.tgz"
+            delete p.devDependencies;
+            delete p.scripts;
+            fs.writeFileSync(f, JSON.stringify(p, null, 2));
+            console.log("  " + p.name + "@" + p.version + " deps=" + JSON.stringify(resolved));
+            '
+            rm -rf /tmp/pack && mkdir -p /tmp/pack
+            for item in dist cordis.patch.yml package.json; do
+              [ -e "$item" ] && cp -r "$item" /tmp/pack/
+            done
+            tar czf "$GITHUB_WORKSPACE/out/$pkg.tgz" -C /tmp/pack .
+            ls -la "$GITHUB_WORKSPACE/out/$pkg.tgz"
+          done
       - uses: actions/upload-artifact@v4
         with:
-          name: dsh-tauri-remote
-          path: dsh-tauri-remote.tgz
+          name: dsh-tauri-set
+          path: out/*.tgz
           if-no-files-found: error
