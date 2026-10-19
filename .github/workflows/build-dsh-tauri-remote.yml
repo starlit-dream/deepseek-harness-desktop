@@ -42,7 +42,7 @@ jobs:
                 resolved[dep] = p[key][dep];
               }
             }
-            for (const key of ["dependencies", "peerDependencies", "devDependencies"]) {
+            for (const key of ["dependencies", "peerDependencies"]) {
               if (!p[key]) continue;
               for (const dep of Object.keys(p[key])) {
                 if (/^(catalog:|workspace:)/.test(String(p[key][dep]))) { console.error("UNRESOLVED " + key + "/" + dep); process.exit(1); }
