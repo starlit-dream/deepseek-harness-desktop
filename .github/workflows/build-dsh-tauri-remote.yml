@@ -16,19 +16,40 @@ jobs:
         run: pnpm install --filter "dsh-tauri-remote..." --ignore-scripts
       - name: build
         run: pnpm --filter dsh-tauri-remote build
-      - name: pack (rewrite workspace:* to ^0.6.7)
+      - name: pack (resolve every spec to the installed version)
         run: |
           cd packages/dsh-tauri-remote
           node -e '
           const fs = require("fs");
+          const path = require("path");
           const f = "package.json";
           const p = JSON.parse(fs.readFileSync(f, "utf8"));
-          for (const k of ["dependencies", "devDependencies", "peerDependencies"]) {
-            if (!p[k]) continue;
-            for (const d of Object.keys(p[k])) {
-              if (String(p[k][d]).startsWith("workspace:")) p[k][d] = "^0.6.7";
+          const resolved = {};
+          for (const key of ["dependencies", "peerDependencies"]) {
+            if (!p[key]) continue;
+            for (const dep of Object.keys(p[key])) {
+              if (!/^(catalog:|workspace:)/.test(String(p[key][dep]))) continue;
+              let v = null;
+              for (const base of ["node_modules", "../../node_modules"]) {
+                try {
+                  v = JSON.parse(fs.readFileSync(path.join(base, dep, "package.json"), "utf8")).version;
+                  break;
+                } catch {}
+              }
+              if (v) { p[key][dep] = "^" + v; resolved[dep] = p[key][dep]; }
             }
           }
+          console.log("resolved:", JSON.stringify(resolved));
+          const left = [];
+          for (const key of ["dependencies", "peerDependencies", "devDependencies"]) {
+            if (!p[key]) continue;
+            for (const dep of Object.keys(p[key])) {
+              if (/^(catalog:|workspace:)/.test(String(p[key][dep]))) left.push(key + "/" + dep + "=" + p[key][dep]);
+            }
+          }
+          if (left.length) { console.error("UNRESOLVED:", left.join(", ")); process.exit(1); }
+          delete p.devDependencies;
+          delete p.scripts;
           fs.writeFileSync(f, JSON.stringify(p, null, 2));
           console.log("packed", p.name, p.version);
           '
